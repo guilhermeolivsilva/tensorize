@@ -40,6 +40,9 @@ std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 createLoopDistributionPass();
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
+createLoopSplitPass();
+
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 createLoopOutlinePass();
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>

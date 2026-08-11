@@ -43,6 +43,7 @@ def main(argv):
 
     # Run preprocessing passes
     passes = []
+    passes.append("split-loops")
     passes.append("change-sizes{sizes=Primes}")
     if FLAGS.distribute:
         passes.append("distribute-loops")

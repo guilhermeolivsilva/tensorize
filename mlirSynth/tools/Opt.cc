@@ -39,6 +39,7 @@ int main(int argc, char **argv) {
   registerCopyModifiedMemrefsPass();
   registerFoldToTensorToMemrefPairPass();
   registerLoopDistributionPass();
+  registerLoopSplitPass();
   registerLoopOutlinePass();
   registerMemrefToScfPass();
   registerMemrefRank0ToScalarPass();

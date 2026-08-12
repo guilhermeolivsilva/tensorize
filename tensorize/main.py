@@ -24,6 +24,7 @@ flags.DEFINE_bool("noguide", False, "Don't select operations automatically")
 flags.DEFINE_list("ops", [], "List of operations to use")
 flags.DEFINE_string("target", "numpy", "Raising target")
 flags.DEFINE_integer("max_num_ops", sys.maxsize, "Maximum number of operations")
+flags.DEFINE_boolean("no_inline", False, "Disable inlining functions in the final program")
 
 
 def main(argv):
@@ -84,7 +85,7 @@ def main(argv):
             print_green(raised_fn_ast)
 
     print()
-    raised_prog = target.construct_program_ast()
+    raised_prog = target.construct_program_ast(no_inline=FLAGS.no_inline)
     print_green(raised_prog)
 
     # Save to disk

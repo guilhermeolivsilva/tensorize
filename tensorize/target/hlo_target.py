@@ -253,7 +253,7 @@ class HloTarget(Target):
         assert last_func is not None
         self.main_function = str(last_func).replace("memref", "tensor")
 
-    def construct_program_ast(self):
+    def construct_program_ast(self, **kwargs):
         new_module_str = ""
 
         for function_idx, function in enumerate(self.functions):

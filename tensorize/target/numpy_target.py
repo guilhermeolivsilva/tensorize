@@ -920,14 +920,16 @@ class NumpyTarget(Target):
 
         self.function_pys = []
 
-    def construct_program_ast(self):
+    def construct_program_ast(self, no_inline=False):
         prog_str = "\n".join(self.function_pys) + "\n" + self.main_function_py
 
-        prog_str = inline_ast_functions(prog_str)
-        prog_str = restore_sizes(prog_str, self.changed_sizes)
-        prog_str = inline_stmts(prog_str)
-        prog_str = normalize_identifiers(prog_str)
+        if not no_inline:
+            prog_str = inline_ast_functions(prog_str)
+            prog_str = restore_sizes(prog_str, self.changed_sizes)
+            prog_str = inline_stmts(prog_str)
+            prog_str = normalize_identifiers(prog_str)
 
         prog_str = prog_str.replace("jnp.", "np.")
+        prog_str = prog_str.replace("def foo", "def main")
 
         return prog_str

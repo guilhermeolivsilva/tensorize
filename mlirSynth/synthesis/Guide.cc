@@ -296,10 +296,12 @@ std::vector<std::string> predictOps(std::vector<std::string> &supportedOps,
   }
 
   if (countNumOps<arith::MaxFOp>(op) > 0) {
+    ops.emplace_back("chlo.broadcast_maximum");
     ops.emplace_back("jnp.max");
   }
 
   if (countNumOps<math::ExpOp>(op) > 0) {
+    ops.emplace_back("stablehlo.exponential");
     ops.emplace_back("jnp.exp");
   }
 

@@ -52,6 +52,13 @@ def LoopDistribution: Pass<"distribute-loops", "mlir::ModuleOp"> {
   let constructor = "createLoopDistributionPass()";
 }
 
+def LoopSplit: Pass<"split-loops", "mlir::ModuleOp"> {
+  let summary = "Splits loops with multiple operations into multiple loops with one operation each";
+  let description = [{
+  }];
+  let constructor = "createLoopSplitPass()";
+}
+
 def LoopOutline: Pass<"outline-loops", "mlir::ModuleOp"> {
   let summary = "Outlines all top-level loops into seperate functions and calls "
                 "them";

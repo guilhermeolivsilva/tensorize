@@ -20,10 +20,13 @@ flags.DEFINE_string("program", None, "Path to the program to synthesize")
 flags.DEFINE_string("synth_out", "", "Result file containing synthesized program")
 flags.DEFINE_boolean("debug", False, "Debug mode")
 flags.DEFINE_boolean("distribute", False, "Distribute loops")
+flags.DEFINE_boolean("split", False, "Split loops")
 flags.DEFINE_bool("noguide", False, "Don't select operations automatically")
 flags.DEFINE_list("ops", [], "List of operations to use")
 flags.DEFINE_string("target", "numpy", "Raising target")
+flags.DEFINE_boolean("numpy_to_hlo", False, "Force the output to be in HLO MLIR")
 flags.DEFINE_integer("max_num_ops", sys.maxsize, "Maximum number of operations")
+flags.DEFINE_boolean("no_inline", False, "Disable inlining functions in the final program")
 
 
 def main(argv):
@@ -41,9 +44,15 @@ def main(argv):
     else:
         raise Exception
 
+    # Check the `numpy_to_hlo` flag
+    if FLAGS.numpy_to_hlo:
+        assert FLAGS.target == "numpy", "Set the target to numpy to enable --numpy_to_hlo"
+
     # Run preprocessing passes
     passes = []
     passes.append("change-sizes{sizes=Primes}")
+    if FLAGS.split:
+        passes.append("split-loops")
     if FLAGS.distribute:
         passes.append("distribute-loops")
     passes.append("outline-loops")
@@ -53,6 +62,7 @@ def main(argv):
         mlir_synth.register_passes()
 
         module = Module.parse(program_contents)
+        arg_shapes = get_arg_shapes(module)
         pm = PassManager.parse(",".join(passes))
         pm.run(module)
 
@@ -83,7 +93,16 @@ def main(argv):
             print_green(raised_fn_ast)
 
     print()
-    raised_prog = target.construct_program_ast()
+    raised_prog = target.construct_program_ast(numpy_to_hlo=FLAGS.numpy_to_hlo, no_inline=FLAGS.no_inline)
+
+    if FLAGS.numpy_to_hlo:
+        numpy_to_hlo_converter = numpy_target.NumpyToHLO(
+            source=raised_prog,
+            shapes=arg_shapes
+        )
+        raised_prog_hlo = numpy_to_hlo_converter.lower_raised_program()
+        raised_prog = raised_prog_hlo.operation.get_asm()
+
     print_green(raised_prog)
 
     # Save to disk

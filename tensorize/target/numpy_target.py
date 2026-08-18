@@ -678,7 +678,7 @@ def normalize_identifiers(prog_str):
 
     # Rename the arguments of the function
     for arg_idx, arg in enumerate(fn.args.args):
-        new_arg_id = "arg" + str(arg_idx)
+        new_arg_id = "v" + str(arg_idx)
         mapping[arg.arg] = new_arg_id
         fn.args.args[arg_idx].arg = new_arg_id
     n_args = len(fn.args.args)
@@ -920,8 +920,13 @@ class NumpyTarget(Target):
 
         self.function_pys = []
 
-    def construct_program_ast(self, no_inline=False):
-        prog_str = "\n".join(self.function_pys) + "\n" + self.main_function_py
+    def construct_program_ast(self, no_inline=False, numpy_to_hlo=False):
+        prog_str = ""
+
+        if numpy_to_hlo:
+            prog_str += "import jax.numpy as jnp\n\n"
+
+        prog_str += "\n".join(self.function_pys) + "\n" + self.main_function_py
 
         if not no_inline:
             prog_str = inline_ast_functions(prog_str)
@@ -929,7 +934,81 @@ class NumpyTarget(Target):
             prog_str = inline_stmts(prog_str)
             prog_str = normalize_identifiers(prog_str)
 
-        prog_str = prog_str.replace("jnp.", "np.")
         prog_str = prog_str.replace("def foo", "def main")
 
         return prog_str
+
+
+class NumpyToHLO:
+    def __init__(self, source, shapes):
+        self.source = source
+        self.shapes = shapes
+
+        self._validate_program()
+
+    def _validate_program(self):
+        tree = ast.parse(self.source, filename="<raised_program>", mode="exec")
+
+        has_main = any(
+            isinstance(node, ast.FunctionDef) and node.name == "main"
+            for node in tree.body
+        )
+
+        if not has_main:
+            raise ValueError("raised program does not define main")
+
+        return tree
+
+    def _make_arguments(self, dtype=jnp.float32):
+        return [
+            jnp.ones(tuple(shape), dtype=dtype)
+            for shape in self.shapes
+        ]
+
+    def lower_raised_program(self, dtype=jnp.float32):
+        namespace = {
+            "__builtins__": {
+                "abs": abs,
+                "bool": bool,
+                "float": float,
+                "int": int,
+                "len": len,
+                "max": max,
+                "min": min,
+                "range": range,
+                "sum": sum,
+                "zip": zip,
+            },
+            "jax": jax,
+            "jnp": jnp,
+        }
+
+        code = compile(
+            self.source,
+            filename="<raised_program>",
+            mode="exec",
+        )
+
+        exec(code, namespace, namespace)
+
+        main = namespace.get("main")
+        if main is None or not callable(main):
+            raise ValueError("raised program does not define callable main")
+
+        arguments = self._make_arguments(dtype)
+
+        if main.__code__.co_argcount != len(arguments):
+            raise ValueError(
+                f"main expects {main.__code__.co_argcount} positional arguments, "
+                f"but {len(arguments)} shapes were provided"
+            )
+
+        lowered = jax.jit(main).lower(*arguments)
+        stablehlo_module = lowered.compiler_ir(dialect="stablehlo")
+
+        if stablehlo_module is None:
+            raise RuntimeError(
+                "JAX did not return StableHLO IR for the lowered program"
+            )
+
+        return stablehlo_module

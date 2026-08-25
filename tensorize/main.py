@@ -11,7 +11,6 @@ import target.hlo_target as hlo_target
 import target.numpy_target as numpy_target
 from array_helpers import *
 from common_helpers import *
-from mlir_helpers import *
 from synthesis import *
 
 
@@ -20,7 +19,7 @@ flags.DEFINE_string("program", None, "Path to the program to synthesize")
 flags.DEFINE_string("synth_out", "", "Result file containing synthesized program")
 flags.DEFINE_boolean("debug", False, "Debug mode")
 flags.DEFINE_boolean("distribute", False, "Distribute loops")
-flags.DEFINE_boolean("split", False, "Split loops")
+flags.DEFINE_boolean("no_loop_split", False, "Do not split loops")
 flags.DEFINE_bool("noguide", False, "Don't select operations automatically")
 flags.DEFINE_list("ops", [], "List of operations to use")
 flags.DEFINE_string("target", "numpy", "Raising target")
@@ -51,7 +50,7 @@ def main(argv):
     # Run preprocessing passes
     passes = []
     passes.append("change-sizes{sizes=Primes}")
-    if FLAGS.split:
+    if not FLAGS.no_loop_split:
         passes.append("split-loops")
     if FLAGS.distribute:
         passes.append("distribute-loops")

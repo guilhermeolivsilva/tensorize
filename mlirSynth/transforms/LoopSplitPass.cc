@@ -63,6 +63,50 @@ getLoadsUsedBy(Operation *op,
   return result;
 }
 
+static bool sameAffineAccess(AffineLoadOp load, AffineStoreOp store) {
+  if (load.getMemRef() != store.getMemref())
+    return false;
+
+  if (load.getAffineMap() != store.getAffineMap())
+    return false;
+
+  return llvm::equal(
+      load.getMapOperands(),
+      store.getMapOperands());
+}
+
+static bool dependsOn(Value value, Value target) {
+  if (value == target)
+    return true;
+
+  Operation *def = value.getDefiningOp();
+  if (!def)
+    return false;
+
+  for (Value operand : def->getOperands()) {
+    if (dependsOn(operand, target))
+      return true;
+  }
+
+  return false;
+}
+
+static bool isReadModifyWriteReduction(
+    ArrayRef<AffineLoadOp> inputLoads,
+    AffineStoreOp outputStore) {
+  Value storedValue = outputStore.getValueToStore();
+
+  for (AffineLoadOp load : inputLoads) {
+    if (!sameAffineAccess(load, outputStore))
+      continue;
+
+    if (dependsOn(storedValue, load.getResult()))
+      return true;
+  }
+
+  return false;
+}
+
 void splitLoop(AffineForOp loop) {
   SmallVector<AffineLoadOp, 4> inputLoads;
   AffineStoreOp outputStore;
@@ -112,6 +156,12 @@ void splitLoop(AffineForOp loop) {
 
   if (computeOps.empty()) {
     loop.emitError("splitLoop could not find arith/math operations");
+    return;
+  }
+
+  // Avoid splitting reductions by rejecting any loop that performs a
+  // read-modify-write of the same output element.
+  if (isReadModifyWriteReduction(inputLoads, outputStore)) {
     return;
   }
 

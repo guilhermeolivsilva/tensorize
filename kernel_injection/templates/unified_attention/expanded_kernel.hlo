@@ -1,0 +1,163 @@
+
+func.func @{{FUNC_NAME}}(
+    %q: tensor<{{B}}x{{HQ}}x{{M}}x{{D}}x{{ELEM}}>,
+    %k: tensor<{{B}}x{{HK}}x{{N}}x{{D}}x{{ELEM}}>,
+    %v: tensor<{{B}}x{{HQ}}x{{NG}}x{{D}}x{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{D}}x{{ELEM}}> {
+// K: [B, HQ*G, N, D] -> [B, HQ, G, N, D].
+%k_grouped = "stablehlo.reshape"(%k)
+    : (tensor<{{B}}x{{HK}}x{{N}}x{{D}}x{{ELEM}}>)
+        -> tensor<{{B}}x{{HQ}}x{{G}}x{{N}}x{{D}}x{{ELEM}}>
+
+// V: [B, HQ, N*G, D] -> [B, HQ, G, N, D].
+//
+// This assumes V is laid out group-major:
+// [g=0, n=0..N-1], [g=1, n=0..N-1], ..., [g=G-1, ...].
+%v_grouped = "stablehlo.reshape"(%v)
+    : (tensor<{{B}}x{{HQ}}x{{NG}}x{{D}}x{{ELEM}}>)
+        -> tensor<{{B}}x{{HQ}}x{{G}}x{{N}}x{{D}}x{{ELEM}}>
+
+// Q [B, HQ, M, D] and K [B, HQ, G, N, D].
+//
+// Batch dimensions: Q[0, 1], K[0, 1].
+// Contract: Q[D=3] with K[D=4].
+//
+// Result: [B, HQ, M, G, N].
+%scores_grouped = "stablehlo.dot_general"(%q, %k_grouped) {
+    dot_dimension_numbers = #stablehlo.dot<
+    lhs_batching_dimensions = [0, 1],
+    rhs_batching_dimensions = [0, 1],
+    lhs_contracting_dimensions = [3],
+    rhs_contracting_dimensions = [4]
+    >
+} : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{D}}x{{ELEM}}>,
+    tensor<{{B}}x{{HQ}}x{{G}}x{{N}}x{{D}}x{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>
+
+%scale = "stablehlo.constant"() {
+    value = dense<{{SCALE}}>
+    : tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>
+} : () -> tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>
+
+%scaled_scores = "stablehlo.multiply"(%scores_grouped, %scale)
+    : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>,
+    tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>
+    ) -> tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>
+
+// Flatten the logical G x N key domain to one softmax axis.
+%scores = "stablehlo.reshape"(%scaled_scores)
+    : (tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>)
+    -> tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+
+%neg_inf = "stablehlo.constant"() {
+    value = dense<{{NEG_INF}}> : tensor<{{ELEM}}>
+} : () -> tensor<{{ELEM}}>
+
+// Row maximum across flattened G*N keys.
+%row_max = "stablehlo.reduce"(%scores, %neg_inf) ({
+    ^bb0(%lhs: tensor<{{ELEM}}>, %rhs: tensor<{{ELEM}}>):
+    %max = "stablehlo.maximum"(%lhs, %rhs)
+        : (tensor<{{ELEM}}>, tensor<{{ELEM}}>) -> tensor<{{ELEM}}>
+    "stablehlo.return"(%max) : (tensor<{{ELEM}}>) -> ()
+}) {
+    dimensions = dense<[3]> : tensor<1xi64>
+} : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>,
+    tensor<{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{ELEM}}>
+
+%row_max_bcast = "stablehlo.broadcast_in_dim"(%row_max) {
+    broadcast_dimensions = dense<[0, 1, 2]> : tensor<3xi64>
+} : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+
+%shifted = "stablehlo.subtract"(%scores, %row_max_bcast)
+    : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>,
+    tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+    ) -> tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+
+%exp_scores = "stablehlo.exponential"(%shifted)
+    : (tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>)
+    -> tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+
+%zero = "stablehlo.constant"() {
+    value = dense<0.000000e+00> : tensor<{{ELEM}}>
+} : () -> tensor<{{ELEM}}>
+
+%row_sum = "stablehlo.reduce"(%exp_scores, %zero) ({
+    ^bb0(%lhs: tensor<{{ELEM}}>, %rhs: tensor<{{ELEM}}>):
+    %sum = "stablehlo.add"(%lhs, %rhs)
+        : (tensor<{{ELEM}}>, tensor<{{ELEM}}>) -> tensor<{{ELEM}}>
+    "stablehlo.return"(%sum) : (tensor<{{ELEM}}>) -> ()
+}) {
+    dimensions = dense<[3]> : tensor<1xi64>
+} : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>,
+    tensor<{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{ELEM}}>
+
+%row_sum_bcast = "stablehlo.broadcast_in_dim"(%row_sum) {
+    broadcast_dimensions = dense<[0, 1, 2]> : tensor<3xi64>
+} : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+
+%probabilities = "stablehlo.divide"(%exp_scores, %row_sum_bcast)
+    : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>,
+    tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+    ) -> tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>
+
+// Reintroduce the grouped key axes to match V.
+%probabilities_grouped = "stablehlo.reshape"(%probabilities)
+    : (tensor<{{B}}x{{HQ}}x{{M}}x{{NG}}x{{ELEM}}>)
+    -> tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>
+
+// [B, HQ, M, G, N] @ [B, HQ, G, N, D].
+//
+// Batch dimensions include the group dimension:
+// P[0, 1, 3], V[0, 1, 2].
+// Contract P[N=4] with V[N=3].
+//
+// Output: [B, HQ, G, M, D].
+%output_grouped = "stablehlo.dot_general"(
+    %probabilities_grouped, %v_grouped
+) {
+    dot_dimension_numbers = #stablehlo.dot<
+    lhs_batching_dimensions = [0, 1, 3],
+    rhs_batching_dimensions = [0, 1, 2],
+    lhs_contracting_dimensions = [4],
+    rhs_contracting_dimensions = [3]
+    >
+} : (
+    tensor<{{B}}x{{HQ}}x{{M}}x{{G}}x{{N}}x{{ELEM}}>,
+    tensor<{{B}}x{{HQ}}x{{G}}x{{N}}x{{D}}x{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{G}}x{{M}}x{{D}}x{{ELEM}}>
+
+// The grouped value contribution must be combined across G before returning
+// [B, HQ, M, D]. The original signature alone does not identify whether
+// this should be a sum, mean, selection, or a different mapping.
+//
+// This template currently sums across groups.
+%zero_out = "stablehlo.constant"() {
+    value = dense<0.000000e+00> : tensor<{{ELEM}}>
+} : () -> tensor<{{ELEM}}>
+
+%output = "stablehlo.reduce"(%output_grouped, %zero_out) ({
+    ^bb0(%lhs: tensor<{{ELEM}}>, %rhs: tensor<{{ELEM}}>):
+    %sum = "stablehlo.add"(%lhs, %rhs)
+        : (tensor<{{ELEM}}>, tensor<{{ELEM}}>) -> tensor<{{ELEM}}>
+    "stablehlo.return"(%sum) : (tensor<{{ELEM}}>) -> ()
+}) {
+    dimensions = dense<[2]> : tensor<1xi64>
+} : (
+    tensor<{{B}}x{{HQ}}x{{G}}x{{M}}x{{D}}x{{ELEM}}>,
+    tensor<{{ELEM}}>
+) -> tensor<{{B}}x{{HQ}}x{{M}}x{{D}}x{{ELEM}}>
+
+return %output : tensor<{{B}}x{{HQ}}x{{M}}x{{D}}x{{ELEM}}>
+}

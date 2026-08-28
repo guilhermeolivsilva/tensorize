@@ -1,0 +1,102 @@
+func.func @{{FUNC_NAME}}(
+    %q: tensor<{{B}}x{{H}}x{{M}}x{{D}}x{{ELEM}}>,
+    %k: tensor<{{B}}x{{H}}x{{N}}x{{D}}x{{ELEM}}>,
+    %v: tensor<{{B}}x{{H}}x{{N}}x{{D}}x{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{D}}x{{ELEM}}> {
+// scores[B, H, M, N] = Q[B, H, M, D] · K[B, H, N, D].
+%scores = "stablehlo.dot_general"(%q, %k) {
+    dot_dimension_numbers = #stablehlo.dot<
+    lhs_batching_dimensions = [0, 1],
+    rhs_batching_dimensions = [0, 1],
+    lhs_contracting_dimensions = [3],
+    rhs_contracting_dimensions = [3]
+    >
+} : (
+    tensor<{{B}}x{{H}}x{{M}}x{{D}}x{{ELEM}}>,
+    tensor<{{B}}x{{H}}x{{N}}x{{D}}x{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%scale = "stablehlo.constant"() {
+    value = dense<{{SCALE}}> : tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+} : () -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%scaled_scores = "stablehlo.multiply"(%scores, %scale)
+    : (
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>,
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+    ) -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%neg_inf = "stablehlo.constant"() {
+    value = dense<{{NEG_INF}}> : tensor<{{ELEM}}>
+} : () -> tensor<{{ELEM}}>
+
+%row_max = "stablehlo.reduce"(%scaled_scores, %neg_inf) ({
+    ^bb0(%lhs: tensor<{{ELEM}}>, %rhs: tensor<{{ELEM}}>):
+    %max = "stablehlo.maximum"(%lhs, %rhs)
+        : (tensor<{{ELEM}}>, tensor<{{ELEM}}>) -> tensor<{{ELEM}}>
+    "stablehlo.return"(%max) : (tensor<{{ELEM}}>) -> ()
+}) {
+    dimensions = dense<[3]> : tensor<1xi64>
+} : (
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>,
+    tensor<{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{ELEM}}>
+
+%row_max_bcast = "stablehlo.broadcast_in_dim"(%row_max) {
+    broadcast_dimensions = dense<[0, 1, 2]> : tensor<3xi64>
+} : (
+    tensor<{{B}}x{{H}}x{{M}}x{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%shifted = "stablehlo.subtract"(%scaled_scores, %row_max_bcast)
+    : (
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>,
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+    ) -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%exp_scores = "stablehlo.exponential"(%shifted)
+    : (tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>)
+    -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%zero = "stablehlo.constant"() {
+    value = dense<0.000000e+00> : tensor<{{ELEM}}>
+} : () -> tensor<{{ELEM}}>
+
+%row_sum = "stablehlo.reduce"(%exp_scores, %zero) ({
+    ^bb0(%lhs: tensor<{{ELEM}}>, %rhs: tensor<{{ELEM}}>):
+    %sum = "stablehlo.add"(%lhs, %rhs)
+        : (tensor<{{ELEM}}>, tensor<{{ELEM}}>) -> tensor<{{ELEM}}>
+    "stablehlo.return"(%sum) : (tensor<{{ELEM}}>) -> ()
+}) {
+    dimensions = dense<[3]> : tensor<1xi64>
+} : (
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>,
+    tensor<{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{ELEM}}>
+
+%row_sum_bcast = "stablehlo.broadcast_in_dim"(%row_sum) {
+    broadcast_dimensions = dense<[0, 1, 2]> : tensor<3xi64>
+} : (
+    tensor<{{B}}x{{H}}x{{M}}x{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%probabilities = "stablehlo.divide"(%exp_scores, %row_sum_bcast)
+    : (
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>,
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+    ) -> tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>
+
+%output = "stablehlo.dot_general"(%probabilities, %v) {
+    dot_dimension_numbers = #stablehlo.dot<
+    lhs_batching_dimensions = [0, 1],
+    rhs_batching_dimensions = [0, 1],
+    lhs_contracting_dimensions = [3],
+    rhs_contracting_dimensions = [2]
+    >
+} : (
+    tensor<{{B}}x{{H}}x{{M}}x{{N}}x{{ELEM}}>,
+    tensor<{{B}}x{{H}}x{{N}}x{{D}}x{{ELEM}}>
+) -> tensor<{{B}}x{{H}}x{{M}}x{{D}}x{{ELEM}}>
+
+return %output : tensor<{{B}}x{{H}}x{{M}}x{{D}}x{{ELEM}}>
+}

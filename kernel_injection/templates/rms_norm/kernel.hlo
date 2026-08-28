@@ -1,0 +1,67 @@
+func.func @{{FUNC_NAME}}(
+  %input: {{INPUT_TYPE}},
+  %weight: tensor<{{FEATURES}}x{{FEATURES_ELEM_TYPE}}>,
+  %epsilon: tensor<f32>
+) -> {{OUTPUT_TYPE}} {
+  %zero = "stablehlo.constant"() {
+    value = dense<0.000000e+00> : tensor<f32>
+  } : () -> tensor<f32>
+
+  %feature_count = "stablehlo.constant"() {
+    value = dense<{{FEATURES}}.000000e+00> : tensor<f32>
+  } : () -> tensor<f32>
+
+  %input_f32 = "stablehlo.convert"(%input)
+      : ({{INPUT_TYPE}}) -> {{F32_TYPE}}
+
+  %squared = "stablehlo.multiply"(%input_f32, %input_f32)
+      : ({{F32_TYPE}}, {{F32_TYPE}}) -> {{F32_TYPE}}
+
+  %sum_sq = "stablehlo.reduce"(%squared, %zero) ({
+    ^bb0(%lhs: tensor<f32>, %rhs: tensor<f32>):
+      %sum = "stablehlo.add"(%lhs, %rhs)
+          : (tensor<f32>, tensor<f32>) -> tensor<f32>
+      "stablehlo.return"(%sum) : (tensor<f32>) -> ()
+  }) {
+    {{SUM_SQ_DIMENSIONS}}
+  } : ({{F32_TYPE}}, tensor<f32>) -> {{REDUCED_TYPE}}
+
+  %feature_count_bcast = "stablehlo.broadcast_in_dim"(%feature_count) {
+    broadcast_dimensions = dense<> : tensor<0xi64>
+  } : (tensor<f32>) -> {{REDUCED_TYPE}}
+
+  %mean_sq = "stablehlo.divide"(%sum_sq, %feature_count_bcast)
+      : ({{REDUCED_TYPE}}, {{REDUCED_TYPE}}) -> {{REDUCED_TYPE}}
+
+  %epsilon_bcast = "stablehlo.broadcast_in_dim"(%epsilon) {
+    broadcast_dimensions = dense<> : tensor<0xi64>
+  } : (tensor<f32>) -> {{REDUCED_TYPE}}
+
+  %variance_eps = "stablehlo.add"(%mean_sq, %epsilon_bcast)
+      : ({{REDUCED_TYPE}}, {{REDUCED_TYPE}}) -> {{REDUCED_TYPE}}
+
+  %inv_rms = "stablehlo.rsqrt"(%variance_eps)
+      : ({{REDUCED_TYPE}}) -> {{REDUCED_TYPE}}
+
+  %inv_rms_bcast = "stablehlo.broadcast_in_dim"(%inv_rms) {
+    {{INV_RMS_BCAST_DIMENSIONS}}
+  } : ({{REDUCED_TYPE}}) -> {{F32_TYPE}}
+
+  %normalized = "stablehlo.multiply"(%input_f32, %inv_rms_bcast)
+      : ({{F32_TYPE}}, {{F32_TYPE}}) -> {{F32_TYPE}}
+
+  %weight_f32 = "stablehlo.convert"(%weight)
+      : (tensor<{{FEATURES}}x{{FEATURES_ELEM_TYPE}}>) -> tensor<{{FEATURES}}xf32>
+
+  %weight_bcast = "stablehlo.broadcast_in_dim"(%weight_f32) {
+    {{WEIGHT_BCAST_DIMENSIONS}}
+  } : (tensor<{{FEATURES}}xf32>) -> {{F32_TYPE}}
+
+  %scaled = "stablehlo.multiply"(%normalized, %weight_bcast)
+      : ({{F32_TYPE}}, {{F32_TYPE}}) -> {{F32_TYPE}}
+
+  %result = "stablehlo.convert"(%scaled)
+      : ({{F32_TYPE}}) -> {{OUTPUT_TYPE}}
+
+  return %result : {{OUTPUT_TYPE}}
+}

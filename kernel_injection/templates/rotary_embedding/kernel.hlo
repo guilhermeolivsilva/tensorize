@@ -1,0 +1,222 @@
+func.func @{{FUNC_NAME}}(
+    %query: tensor<{{FLAT_ROWS}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>,
+    %key: tensor<{{FLAT_ROWS}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>,
+    %cos: tensor<{{POSITIONS}}x{{HALF_DIM}}x{{COS_ELEM_TYPE}}>,
+    %sin: tensor<{{POSITIONS}}x{{HALF_DIM}}x{{COS_ELEM_TYPE}}>
+) -> (
+    tensor<{{FLAT_ROWS}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>,
+    tensor<{{FLAT_ROWS}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+) {
+  // [FLAT_ROWS, H, D] -> [POSITIONS, ROWS_PER_POSITION, H, D].
+  %q4 = "stablehlo.reshape"(%query)
+      : (tensor<{{FLAT_ROWS}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>)
+        -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+
+  %k4 = "stablehlo.reshape"(%key)
+      : (tensor<{{FLAT_ROWS}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>)
+        -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+
+  %q_f32 = "stablehlo.convert"(%q4)
+      : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>)
+        -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>
+
+  %k_f32 = "stablehlo.convert"(%k4)
+      : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>)
+        -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>
+
+  {{COS_FULL_DEF}}
+  %cos_full_f32 = "stablehlo.convert"(%cos_full)
+      : (tensor<{{POSITIONS}}x{{HEAD_DIM}}x{{COS_ELEM_TYPE}}>)
+        -> (tensor<{{POSITIONS}}x{{HEAD_DIM}}xf32>)
+
+  {{SIN_FULL_DEF}}
+  %sin_full_f32 = "stablehlo.convert"(%sin_full)
+      : (tensor<{{POSITIONS}}x{{HEAD_DIM}}x{{COS_ELEM_TYPE}}>)
+        -> (tensor<{{POSITIONS}}x{{HEAD_DIM}}xf32>)
+
+  // [position, D] -> [position, row, Q-head, D].
+  %q_cos = "stablehlo.broadcast_in_dim"(%cos_full_f32) {
+    broadcast_dimensions = dense<[0, 3]> : tensor<2xi64>
+  } : (tensor<{{POSITIONS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>
+
+  %q_sin = "stablehlo.broadcast_in_dim"(%sin_full_f32) {
+    broadcast_dimensions = dense<[0, 3]> : tensor<2xi64>
+  } : (tensor<{{POSITIONS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>
+
+  // [position, D] -> [position, row, K-head, D].
+  %k_cos = "stablehlo.broadcast_in_dim"(%cos_full_f32) {
+    broadcast_dimensions = dense<[0, 3]> : tensor<2xi64>
+  } : (tensor<{{POSITIONS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>
+
+  %k_sin = "stablehlo.broadcast_in_dim"(%sin_full_f32) {
+    broadcast_dimensions = dense<[0, 3]> : tensor<2xi64>
+  } : (tensor<{{POSITIONS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>
+
+  // First and second D/2 channel halves of Q.
+  %q0 = "stablehlo.slice"(%q_f32) {
+    start_indices = dense<[0, 0, 0, 0]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{Q_HEADS}}, {{HALF_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q1 = "stablehlo.slice"(%q_f32) {
+    start_indices = dense<[0, 0, 0, {{HALF_DIM}}]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{Q_HEADS}}, {{HEAD_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q_cos_half = "stablehlo.slice"(%q_cos) {
+    start_indices = dense<[0, 0, 0, 0]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{Q_HEADS}}, {{HALF_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q_sin_half = "stablehlo.slice"(%q_sin) {
+    start_indices = dense<[0, 0, 0, 0]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{Q_HEADS}}, {{HALF_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q0_cos = "stablehlo.multiply"(%q0, %q_cos_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q1_sin = "stablehlo.multiply"(%q1, %q_sin_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q_first = "stablehlo.subtract"(%q0_cos, %q1_sin)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q0_sin = "stablehlo.multiply"(%q0, %q_sin_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q1_cos = "stablehlo.multiply"(%q1, %q_cos_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q_second = "stablehlo.add"(%q0_sin, %q1_cos)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+
+  %q_rot_f32 = "stablehlo.concatenate"(%q_first, %q_second) {
+    dimension = 3 : i64
+  } : (
+    tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>,
+    tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HALF_DIM}}xf32>
+  ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>
+
+  // K: identical rotate-half calculation with K_HEADS.
+  %k0 = "stablehlo.slice"(%k_f32) {
+    start_indices = dense<[0, 0, 0, 0]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{K_HEADS}}, {{HALF_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k1 = "stablehlo.slice"(%k_f32) {
+    start_indices = dense<[0, 0, 0, {{HALF_DIM}}]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{K_HEADS}}, {{HEAD_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k_cos_half = "stablehlo.slice"(%k_cos) {
+    start_indices = dense<[0, 0, 0, 0]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{K_HEADS}}, {{HALF_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k_sin_half = "stablehlo.slice"(%k_sin) {
+    start_indices = dense<[0, 0, 0, 0]> : tensor<4xi64>,
+    limit_indices = dense<[{{POSITIONS}}, {{ROWS_PER_POSITION}}, {{K_HEADS}}, {{HALF_DIM}}]> : tensor<4xi64>,
+    strides = dense<[1, 1, 1, 1]> : tensor<4xi64>
+  } : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>)
+       -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k0_cos = "stablehlo.multiply"(%k0, %k_cos_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k1_sin = "stablehlo.multiply"(%k1, %k_sin_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k_first = "stablehlo.subtract"(%k0_cos, %k1_sin)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k0_sin = "stablehlo.multiply"(%k0, %k_sin_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k1_cos = "stablehlo.multiply"(%k1, %k_cos_half)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k_second = "stablehlo.add"(%k0_sin, %k1_cos)
+      : (
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+        tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+      ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+
+  %k_rot_f32 = "stablehlo.concatenate"(%k_first, %k_second) {
+    dimension = 3 : i64
+  } : (
+    tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>,
+    tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HALF_DIM}}xf32>
+  ) -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>
+
+  %q4_out = "stablehlo.convert"(%q_rot_f32)
+      : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}xf32>)
+        -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+
+  %k4_out = "stablehlo.convert"(%k_rot_f32)
+      : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}xf32>)
+        -> tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+
+  %q_out = "stablehlo.reshape"(%q4_out)
+      : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>)
+        -> tensor<{{FLAT_ROWS}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+
+  %k_out = "stablehlo.reshape"(%k4_out)
+      : (tensor<{{POSITIONS}}x{{ROWS_PER_POSITION}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>)
+        -> tensor<{{FLAT_ROWS}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+
+  return %q_out, %k_out
+      : tensor<{{FLAT_ROWS}}x{{Q_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>,
+        tensor<{{FLAT_ROWS}}x{{K_HEADS}}x{{HEAD_DIM}}x{{ELEM}}>
+}

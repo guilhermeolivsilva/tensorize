@@ -1,6 +1,37 @@
 import re as pyre
 
 
+def rewrite_properties_syntax(mlir_text: str) -> str:
+    """Convert every balanced `<{ ... }>` property dictionary to `{ ... }`."""
+    output = []
+    i = 0
+
+    while i < len(mlir_text):
+        if mlir_text.startswith("<{", i):
+            depth = 1
+            j = i + 2
+
+            while j < len(mlir_text) and depth:
+                if mlir_text[j] == "{":
+                    depth += 1
+                elif mlir_text[j] == "}":
+                    depth -= 1
+                j += 1
+
+            if depth != 0 or j >= len(mlir_text) or mlir_text[j] != ">":
+                raise ValueError("Unbalanced MLIR property dictionary")
+
+            output.append("{")
+            output.append(mlir_text[i + 2:j - 1])
+            output.append("}")
+            i = j + 1
+        else:
+            output.append(mlir_text[i])
+            i += 1
+
+    return "".join(output)
+
+
 def rewrite_custom_call_syntax(mlir_text: str) -> str:
     pattern = pyre.compile(
         r"""
@@ -154,7 +185,77 @@ def rewrite_slice_syntax(mlir_text):
     return SLICE_PATTERN.sub(rewrite_slice, mlir_text)
 
 
+def dense_i64(values):
+    values = [value.strip() for value in values if value.strip()]
+
+    return (
+        "dense<[" + ", ".join(values) + "]> : "
+        "tensor<" + str(len(values)) + "xi64>"
+    )
+
+
+def rewrite_gather_syntax(mlir_text):
+    GATHER_PATTERN = pyre.compile(
+        r"""
+        (?P<prefix>
+        "stablehlo[.]gather"
+        \s*
+        \(
+            (?P<operand>%[A-Za-z0-9_.$-]+)
+            \s*,\s*
+            (?P<start_indices>%[A-Za-z0-9_.$-]+)
+        \)
+        \s*
+        \{
+            (?P<attrs>.*?)
+        \}
+        )
+        (?P<suffix>
+        \s*:
+        )
+        """,
+        pyre.VERBOSE | pyre.DOTALL,
+    )
+
+
+    SLICE_SIZES_PATTERN = pyre.compile(
+        r"""
+        slice_sizes
+        \s*=\s*
+        array<i64:
+        \s*(?P<values>[^>]*?)
+        \s*
+        >
+        """,
+        pyre.VERBOSE | pyre.DOTALL,
+    )
+
+    def rewrite_gather(match):
+        attrs = match.group("attrs")
+
+        def rewrite_slice_sizes(slice_match):
+            values = slice_match.group("values").split(",")
+            return "slice_sizes = " + dense_i64(values)
+
+        attrs = SLICE_SIZES_PATTERN.sub(rewrite_slice_sizes, attrs)
+
+        return (
+            '"stablehlo.gather"('
+            + match.group("operand")
+            + ", "
+            + match.group("start_indices")
+            + ") {"
+            + attrs
+            + "}"
+            + match.group("suffix")
+        )
+
+    return GATHER_PATTERN.sub(rewrite_gather, mlir_text)
+
+
 def patch_custom_assembly_ops(module_text: str) -> str:
+    module_text = rewrite_properties_syntax(module_text)
     module_text = rewrite_custom_call_syntax(module_text)
     module_text = rewrite_dot_general_syntax(module_text)
+    module_text = rewrite_gather_syntax(module_text)
     return rewrite_slice_syntax(module_text)

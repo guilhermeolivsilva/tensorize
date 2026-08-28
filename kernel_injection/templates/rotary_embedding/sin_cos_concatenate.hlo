@@ -1,0 +1,5 @@
+%{{SIN_COS}}_full = "stablehlo.concatenate"(%{{SIN_COS}}, %{{SIN_COS}}) {
+    dimension = 1 : i64
+  } : (tensor<{{POSITIONS}}x{{HALF_DIM}}x{{COS_ELEM_TYPE}}>,
+        tensor<{{POSITIONS}}x{{HALF_DIM}}x{{COS_ELEM_TYPE}}>)
+        -> tensor<{{POSITIONS}}x{{HEAD_DIM}}x{{COS_ELEM_TYPE}}>

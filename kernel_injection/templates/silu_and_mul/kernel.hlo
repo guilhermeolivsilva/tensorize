@@ -1,0 +1,36 @@
+
+func.func @{{FUNC_NAME}}(
+    %input: tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}>,
+    %gate: tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}>
+) -> tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}> {
+  // Compute the sigmoid in f32.
+  %input_f32 = "stablehlo.convert"(%input)
+      : (tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}>)
+        -> tensor<{{ROWS}}x{{FEATURES}}xf32>
+
+  %gate_f32 = "stablehlo.convert"(%gate)
+      : (tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}>)
+        -> tensor<{{ROWS}}x{{FEATURES}}xf32>
+
+  %sigmoid = "stablehlo.logistic"(%input_f32)
+      : (tensor<{{ROWS}}x{{FEATURES}}xf32>)
+        -> tensor<{{ROWS}}x{{FEATURES}}xf32>
+
+  %silu = "stablehlo.multiply"(%input_f32, %sigmoid)
+      : (
+        tensor<{{ROWS}}x{{FEATURES}}xf32>,
+        tensor<{{ROWS}}x{{FEATURES}}xf32>
+      ) -> tensor<{{ROWS}}x{{FEATURES}}xf32>
+
+  %output_f32 = "stablehlo.multiply"(%silu, %gate_f32)
+      : (
+        tensor<{{ROWS}}x{{FEATURES}}xf32>,
+        tensor<{{ROWS}}x{{FEATURES}}xf32>
+      ) -> tensor<{{ROWS}}x{{FEATURES}}xf32>
+
+  %output = "stablehlo.convert"(%output_f32)
+      : (tensor<{{ROWS}}x{{FEATURES}}xf32>)
+        -> tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}>
+
+  return %output : tensor<{{ROWS}}x{{FEATURES}}x{{ELEM}}>
+}

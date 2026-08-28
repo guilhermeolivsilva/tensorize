@@ -1,0 +1,3 @@
+%{{SIN_COS}}_full = "stablehlo.reshape"(%{{SIN_COS}})
+      : (tensor<{{POSITIONS}}x{{HALF_DIM}}x{{COS_ELEM_TYPE}}>)
+        -> tensor<{{POSITIONS}}x{{HALF_DIM}}x{{COS_ELEM_TYPE}}>

@@ -49,6 +49,7 @@ def main(argv):
 
     # Run preprocessing passes
     passes = []
+    passes.append("iter-args-to-memref")
     passes.append("change-sizes{sizes=Primes}")
     if not FLAGS.no_loop_split:
         passes.append("split-loops")
@@ -56,8 +57,8 @@ def main(argv):
         passes.append("distribute-loops")
     passes.append("outline-loops")
 
-    with Context():
-        mlir_synth.register_dialects()
+    with Context() as ctx:
+        mlir_synth.register_dialects(ctx)
         mlir_synth.register_passes()
 
         module = Module.parse(program_contents)

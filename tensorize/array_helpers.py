@@ -726,9 +726,9 @@ def copy_arg_symbols(arg_symbols):
         if isinstance(syms, list):
             return [helper(s) for s in syms]
 
-        if isinstance(syms, Zero):
+        if isinstance(syms, (Zero, int)):
             return Zero()
-        if isinstance(syms, One):
+        if isinstance(syms, (One, int)):
             return One()
 
         return sympy.Symbol(syms.name)

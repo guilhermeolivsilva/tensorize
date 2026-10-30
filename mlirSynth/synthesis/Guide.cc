@@ -305,6 +305,26 @@ std::vector<std::string> predictOps(std::vector<std::string> &supportedOps,
     ops.emplace_back("jnp.exp");
   }
 
+  if (countNumOps<math::CosOp>(op) > 0) {
+    ops.emplace_back("stablehlo.cosine");
+    ops.emplace_back("jnp.cos");
+  }
+
+  if (countNumOps<math::SinOp>(op) > 0) {
+    ops.emplace_back("stablehlo.sine");
+    ops.emplace_back("jnp.sin");
+  }
+
+  if (countNumOps<math::PowFOp>(op) > 0) {
+    ops.emplace_back("stablehlo.power");
+    ops.emplace_back("jnp.power");
+  }
+
+  if (countNumOps<arith::NegFOp>(op) > 0) {
+    ops.emplace_back("stablehlo.negate");
+    ops.emplace_back("jnp.negative");
+  }
+
   if (hasMulsWithSameOperands(op)) {
     ops.emplace_back("chlo.broadcast_power");
     ops.emplace_back("jnp.power");

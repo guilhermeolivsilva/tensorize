@@ -127,6 +127,37 @@ static Value cloneValueProducer(
   return mapping.lookup(value);
 }
 
+static llvm::SmallVector<Operation *> getLoopsToOutline(func::FuncOp func) {
+  llvm::SmallVector<Operation *> loops;
+  func.walk([&](AffineForOp forOp) {
+    bool hasInner = false;
+    forOp.getBody()->walk([&](AffineForOp) { hasInner = true; });
+    if (!hasInner)
+      loops.push_back(forOp);
+  });
+  return loops;
+}
+
+static llvm::SetVector<Value> getCapturedValues(Operation *loop) {
+  llvm::SetVector<Value> captured;
+  loop->walk([&](Operation *op) {
+    for (Value operand : op->getOperands()) {
+      // Defined inside the loop (op result or nested block arg)?
+      if (Operation *def = operand.getDefiningOp()) {
+        if (loop->isAncestor(def))
+          continue;
+      } else {
+        auto ba = cast<BlockArgument>(operand);
+        Operation *owner = ba.getOwner()->getParentOp();
+        if (owner && loop->isAncestor(owner))
+          continue;
+      }
+      captured.insert(operand);
+    }
+  });
+  return captured;
+}
+
 static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
   auto unknownLoc = UnknownLoc::get(origFunc.getContext());
 
@@ -135,7 +166,7 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
     origFunc.dump();
 
   auto module = origFunc->getParentOfType<ModuleOp>();
-  auto topLoops = getTopLevelLoops(origFunc);
+  auto topLoops = getLoopsToOutline(origFunc);
 
   BlockAndValueMapping fnResultMapper;
   Operation *lastFunc = nullptr;
@@ -143,7 +174,8 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
   for (auto *topLoop : topLoops) {
     auto loop = cast<AffineForOp>(topLoop);
 
-    auto undefinedValues = getOutOfBlockDefValues(loop.getBody());
+    // auto undefinedValues = getOutOfBlockDefValues(loop.getBody());
+    auto undefinedValues = getCapturedValues(topLoop);
     auto loadedValues = getLoadedMemRefValues(topLoop);
     auto storedValues = getStoredMemRefValues(topLoop);
     auto allocaValues = getAllocaMemRefValues(topLoop);
@@ -187,10 +219,17 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
 
     // Add arguments to function.
     BlockAndValueMapping argMapper;
+    auto isDefinedOutside = [&](Value v) {
+      if (Operation *def = v.getDefiningOp())
+        return !topLoop->isAncestor(def);
+      auto ba = cast<BlockArgument>(v);
+      return !topLoop->isAncestor(ba.getOwner()->getParentOp());
+    };
 
     // - Add loaded values as arguments.
     for (auto value : loadedValues) {
-      if (std::find(undefinedValues.begin(),
+      if (!isDefinedOutside(value) ||
+          std::find(undefinedValues.begin(),
                     undefinedValues.end(),
                     value) != undefinedValues.end()) {
         continue;
@@ -199,6 +238,15 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
       auto newArg = bodyBlock.addArgument(value.getType(), unknownLoc);
       argMapper.map(value, newArg);
     }
+
+    const bool isTopLevel = topLoop->getParentOp() == origFunc.getOperation();
+
+    // Ops whose clones now live inside the outlined function. Only these may be
+    // removed from the caller after the loop is erased.
+    llvm::SmallVector<memref::AllocaOp> sunkAllocas;
+    llvm::SmallVector<AffineStoreOp> sunkInitStores;
+    llvm::SmallSetVector<Operation *, 4> sunkInitProducers;
+
     // - Add undefined values as arguments or as local variables if they are
     // constants.
     for (auto value : undefinedValues) {
@@ -217,49 +265,30 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
         argMapper.map(value, newConstantOp.getResult());
 
         // - Memref alloca.
-      } else if (auto allocaOp =
-                    dyn_cast_or_null<memref::AllocaOp>(definingOp)) {
-        // Clone the allocation inside the outlined function.
+      } else if (auto allocaOp = isTopLevel
+               ? dyn_cast_or_null<memref::AllocaOp>(definingOp)
+               : memref::AllocaOp()) {
         Operation *newAllocaOp = allocaOp->clone();
         bodyBlock.push_back(newAllocaOp);
+        argMapper.map(value, newAllocaOp->getResult(0));
 
-        argMapper.map(
-            value,
-            newAllocaOp->getResult(0));
-
-        AffineStoreOp initStore =
-            findInitializer(value, loop);
-
-        if (!initStore) {
-          allocaOp->emitError(
-              "cannot outline alloca without an initialization store");
-          return;
-        }
+        AffineStoreOp initStore = findInitializer(value, loop);
+        if (!initStore) { /* error as before */ return; }
 
         Value initValue = initStore.getValueToStore();
         Operation *initDef = initValue.getDefiningOp();
-
         if (initDef) {
-          mapExternalOperands(
-              initDef,
-              bodyBlock,
-              argMapper,
-              unknownLoc);
+          mapExternalOperands(initDef, bodyBlock, argMapper, unknownLoc);
+          cloneValueProducer(initValue, argMapper, bodyBlock);
+        } else if (!argMapper.contains(initValue)) { /* error as before */ return; }
 
-          cloneValueProducer(
-              initValue,
-              argMapper,
-              bodyBlock);
-        } else if (!argMapper.contains(initValue)) {
-          initStore.emitError(
-              "initializer value is not mapped into outlined function");
-          return;
-        }
+        bodyBlock.push_back(initStore->clone(argMapper));
 
-        Operation *newInitStore =
-            initStore->clone(argMapper);
-
-        bodyBlock.push_back(newInitStore);
+        // Record only after the clone succeeded.
+        sunkAllocas.push_back(allocaOp);
+        sunkInitStores.push_back(initStore);
+        if (initDef)
+          sunkInitProducers.insert(initDef);
       }
 
         // Else, add as argument.
@@ -277,30 +306,18 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
     llvm::SetVector<Value> storedValue;
 
     Value lastStoredMemref = nullptr;
-    topLoop->walk(
-        [&](AffineStoreOp storeOp) { lastStoredMemref = storeOp.getMemref(); });
+    topLoop->walk([&](AffineStoreOp storeOp) {
+      Value m = storeOp.getMemref();
+      Operation *def = m.getDefiningOp();
+      if (def && topLoop->isAncestor(def))   // allocated inside the loop: local
+        return;
+      lastStoredMemref = m;
+    });
     assert(lastStoredMemref != nullptr && "No last stored memref found.");
 
     storedValue.insert(lastStoredMemref);
 
     Value originalStoredMemref = *storedValue.begin();
-
-    auto originalAlloca =
-        dyn_cast_or_null<memref::AllocaOp>(
-            originalStoredMemref.getDefiningOp());
-
-    AffineStoreOp originalInitStore;
-    Operation *originalInitProducer = nullptr;
-
-    if (originalAlloca) {
-      originalInitStore =
-          findInitializer(originalStoredMemref, loop);
-
-      if (originalInitStore) {
-        originalInitProducer =
-            originalInitStore.getValueToStore().getDefiningOp();
-      }
-    }
 
     // - Create return operation.
     llvm::SmallVector<Value> results;
@@ -321,9 +338,9 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
     if (auto origFuncArgAttrs = origFunc.getAllArgAttrs()) {
       for (auto arg : bodyBlock.getArguments()) {
         auto newArg = reverseMapper.lookup(arg);
-        if (auto value = newArg.dyn_cast<BlockArgument>()) {
-          auto attribute = origFuncArgAttrs[value.getArgNumber()];
-          argAttrs.push_back(attribute);
+        if (auto value = newArg.dyn_cast<BlockArgument>();
+            value && value.getOwner() == &origFunc.front()) {
+          argAttrs.push_back(origFuncArgAttrs[value.getArgNumber()]);
         } else {
           argAttrs.push_back(builder.getDictionaryAttr({}));
         }
@@ -374,10 +391,8 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
         if (owner == callOp.getOperation())
           continue;
 
-        if (owner->getBlock() != topLoop->getBlock())
-          continue;
-
-        if (!topLoop->isBeforeInBlock(owner))
+        Operation *anc = topLoop->getBlock()->findAncestorOpInBlock(*owner);
+        if (!anc || anc == callOp.getOperation() || !topLoop->isBeforeInBlock(anc))
           continue;
 
         usesToReplace.push_back(&use);
@@ -391,34 +406,30 @@ static void outlineLoops(func::FuncOp &origFunc, unsigned &loopCounter) {
     // and are no longer relevant.
     topLoop->erase();
 
-    // The original initialization is now dead because:
-    //   - the original loop was erased;
-    //   - later uses were redirected to the call result.
-    if (originalInitStore &&
-        originalInitStore->use_empty()) {
-      originalInitStore.erase();
-    }
+    // 1. The init stores were cloned into the outlined function. The caller-side
+    //    copies are dead and must go first (they use the producer and the alloca).
+    //    No use_empty() check here: stores have no results, so it is vacuous.
+    for (AffineStoreOp store : sunkInitStores)
+      store.erase();
 
-    // The initialization producer is usually an affine.load. It becomes dead
-    // after the initialization store is removed.
-    if (originalInitProducer &&
-        originalInitProducer->use_empty()) {
-      originalInitProducer->erase();
-    }
+    // 2. Producers (e.g. an affine.load or constant), only if nothing else
+    //    still uses them.
+    for (Operation *producer : sunkInitProducers)
+      if (producer->use_empty())
+        producer->erase();
 
-    // Finally remove the original caller-side allocation.
-    if (originalAlloca &&
-        originalAlloca->use_empty()) {
-      originalAlloca.erase();
-    }
+    // 3. Finally the caller-side allocas, only if no remaining uses.
+    for (memref::AllocaOp alloca : sunkAllocas)
+      if (alloca->use_empty())
+        alloca.erase();
   }
 }
 
 void LoopOutlinePass::runOnOperation() {
   auto operation = getOperation();
   unsigned loopCounter = 0;
-  for (auto func : operation.getOps<func::FuncOp>())
-    outlineLoops(func, loopCounter);
+  SmallVector<func::FuncOp> funcs(operation.getOps<func::FuncOp>());
+  for (auto func : funcs) outlineLoops(func, loopCounter);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>> createLoopOutlinePass() {

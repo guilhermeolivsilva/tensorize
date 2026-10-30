@@ -62,6 +62,10 @@ def get_as_tensor_type(ty):
         return RankedTensorType.get(mr.shape, mr.element_type)
     elif F64Type.isinstance(ty):
         return RankedTensorType.get((), F64Type(ty))
+    elif F32Type.isinstance(ty):
+        return RankedTensorType.get((), F32Type(ty))
+    elif IndexType.isinstance(ty):
+        return RankedTensorType.get((), IndexType.get())
     else:
         raise Exception("Unsupported type: " + str(ty))
 
@@ -148,6 +152,17 @@ def affine_to_arg_symbols(affine_module_str):
         func = get_function(affine_module)
         entry_block = func.regions[0].blocks[0]
 
+        mem_dims = [
+            d
+            for a in func.arguments
+            if MemRefType.isinstance(a.type)
+            for d in MemRefType(a.type).shape
+        ]
+        if len(mem_dims) > 0:
+            index_value = 1 if min(mem_dims) > 1 else 0
+        else:
+            index_value = 0
+
         for arg_idx, arg in enumerate(entry_block.arguments):
             name = "A_%d" % arg_idx
 
@@ -164,8 +179,12 @@ def affine_to_arg_symbols(affine_module_str):
             elif RankedTensorType.isinstance(arg.type):
                 rt = RankedTensorType(arg.type)
                 sym_args.append(get_symbols_nd(name, rt.shape, arg_property))
+            elif F32Type.isinstance(arg.type):
+                sym_args.append(get_symbols_nd(name, [], arg_property))
             elif F64Type.isinstance(arg.type):
                 sym_args.append(get_symbols_nd(name, [], arg_property))
+            elif IndexType.isinstance(arg.type):
+                sym_args.append(index_value)
             else:
                 raise Exception("Unsupported type: " + str(arg.type))
     return sym_args

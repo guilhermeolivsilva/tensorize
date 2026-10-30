@@ -745,6 +745,57 @@ static LogicalResult printOperation(PythonEmitter &emitter, math::ExpOp expOp) {
   return success();
 }
 
+static LogicalResult printOperation(PythonEmitter &emitter,
+                                    math::CosOp cosOp) {
+  // Emit a variable declaration.
+  if (failed(emitter.emitAssignPrefix(*cosOp)))
+    return failure();
+
+  raw_ostream &os = emitter.ostream();
+  os << "cos(";
+
+  if (failed(emitter.emitOperands(*cosOp.getOperation())))
+    return failure();
+
+  os << ")";
+
+  return success();
+}
+
+static LogicalResult printOperation(PythonEmitter &emitter,
+                                    math::SinOp sinOp) {
+  // Emit a variable declaration.
+  if (failed(emitter.emitAssignPrefix(*sinOp)))
+    return failure();
+
+  raw_ostream &os = emitter.ostream();
+  os << "sin(";
+
+  if (failed(emitter.emitOperands(*sinOp.getOperation())))
+    return failure();
+
+  os << ")";
+
+  return success();
+}
+
+static LogicalResult printOperation(PythonEmitter &emitter,
+                                    arith::NegFOp negOp) {
+  // Emit a variable declaration.
+  if (failed(emitter.emitAssignPrefix(*negOp)))
+    return failure();
+
+  raw_ostream &os = emitter.ostream();
+  os << "-(";
+
+  if (failed(emitter.emitOperands(*negOp.getOperation())))
+    return failure();
+
+  os << ")";
+
+  return success();
+}
+
 void emitMemrefAllocation(PythonEmitter &emitter, OpResult res) {
     if (auto mType = dyn_cast<MemRefType>(res.getType())) {
       std::string curStr = "None";
@@ -1334,6 +1385,7 @@ LogicalResult PythonEmitter::emitOperation(Operation &op,
               [&](auto op) { return printOperation(*this, op); })
           .Case<arith::FPToSIOp, arith::SIToFPOp, arith::UIToFPOp>(
               [&](auto op) { return printOperation(*this, op); })
+          .Case<arith::NegFOp>([&](auto op) { return printOperation(*this, op); })
 
           // Math ops.
           .Case<math::SqrtOp>(
@@ -1341,6 +1393,8 @@ LogicalResult PythonEmitter::emitOperation(Operation &op,
           .Case<math::PowFOp>(
               [&](auto op) { return printOperation(*this, op); })
           .Case<math::ExpOp>([&](auto op) { return printOperation(*this, op); })
+          .Case<math::CosOp>([&](auto op) { return printOperation(*this, op); })
+          .Case<math::SinOp>([&](auto op) { return printOperation(*this, op); })
 
           // Memref ops.
           .Case<memref::AllocOp, memref::DeallocOp, memref::AllocaOp>(

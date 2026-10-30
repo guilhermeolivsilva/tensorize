@@ -428,6 +428,15 @@ HLOInitialCandidateGenerator::gen(std::vector<mlir::Type> &argTypes,
     } else if (argType.isa<FloatType>()) {
       inputs.emplace_back(RankedTensorType::get({}, argType),
                           grammar::OpAndResType::HLO_Tensor);
+    } else if (argType.isa<IndexType>()) {
+      // `index` is not a valid tensor element type in HLO, so model it as a
+      // rank-0 i64 tensor.
+      inputs.emplace_back(RankedTensorType::get({}, builder.getI64Type()),
+                          grammar::OpAndResType::HLO_Tensor);
+    } else if (argType.isa<IntegerType>()) {
+      // Optional: plain integers (i32, i64, ...) can use the same scalar path.
+      inputs.emplace_back(RankedTensorType::get({}, argType),
+                          grammar::OpAndResType::HLO_Tensor);
     } else {
       llvm::outs() << "Type: " << argType << "\n";
       assert(false && "Unsupported type");

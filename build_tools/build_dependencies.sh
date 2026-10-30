@@ -107,6 +107,49 @@ fi
 make -j$(nproc)
 popd
 
+# Polygeist
+# ####
+# Pull
+if [ ! -d "Polygeist" ]; then
+  git clone --recursive https://github.com/llvm/Polygeist
+  pushd Polygeist
+
+  # Build Polygeist's patched LLVM (not ideal to have a duplicate LLVM build...)
+  pushd llvm-project
+  mkdir build
+  cd build
+  cmake ../llvm \
+    -GNinja \
+    -DLLVM_INSTALL_UTILS=ON \
+    -DLLVM_ENABLE_PROJECTS="mlir;clang" \
+    -DLLVM_INCLUDE_TOOLS=ON \
+    -DLLVM_ENABLE_BINDINGS=OFF \
+    -DLLVM_BUILD_TOOLS=ON \
+    -DLLVM_INCLUDE_TESTS=OFF \
+    -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+    -DCMAKE_BUILD_TYPE=DEBUG \
+    -DLLVM_PARALLEL_LINK_JOBS=1 \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+    -DLLVM_ENABLE_LLD=ON \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DLLVM_TARGETS_TO_BUILD=X86
+  cmake --build . -j4
+  popd
+
+  # Build Polygeist
+  mkdir build
+  cd build
+  cmake .. \
+    -DMLIR_DIR=$PWD/../llvm-project/build/lib/cmake/mlir \
+    -DCLANG_DIR=$PWD/../llvm-project/build/lib/cmake/clang \
+    -DLLVM_TARGETS_TO_BUILD="host" \
+    -DLLVM_ENABLE_ASSERTIONS=ON \
+    -DCMAKE_BUILD_TYPE=DEBUG
+  cmake --build . -j4
+  popd
+fi
+
 # Indicators
 # ####
 # Pull

@@ -23,6 +23,9 @@ NUMPY_GRAMMAR = [
     (jnp.sum, float, [float]),
     (jnp.max, float, [float]),
     (jnp.exp, float, [float]),
+    (jnp.cos, float, [float]),
+    (jnp.sin, float, [float]),
+    (jnp.negative, float, [float]),
     (jnp.transpose, float, [float]),
     (jnp.sqrt, float, [float]),
     (jnp.divide, float, [float, float]),
@@ -495,22 +498,26 @@ def replace_return_value(py_str):
     tree = ast.parse(py_str)
     last_func = tree.body[-1]
 
-    # Get the value of the last function call
     assert isinstance(last_func.body[-1], ast.Return)
 
-    last_call = None
-    for stmt in last_func.body:
-        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call):
-            last_call = stmt.value
-    assert last_call
+    # Last `name = call(...)` anywhere in the function, in source order.
+    # (ast.walk is breadth-first, so sort by position instead of trusting it.)
+    assigns = [
+        n for n in ast.walk(last_func)
+        if isinstance(n, ast.Assign)
+        and isinstance(n.value, ast.Call)
+        and len(n.targets) == 1
+        and isinstance(n.targets[0], ast.Name)
+    ]
+    assert assigns, "no call found in main function"
+    last_assign = max(assigns, key=lambda n: (n.lineno, n.col_offset))
+    result_name = last_assign.targets[0].id
 
-    # Remove the return statement
-    last_func.body = last_func.body[:-2]
+    # Replace the trailing `return` with `return <result of last call>`.
+    # Python loops don't create a scope, so the name is visible after the loop.
+    last_func.body[-1] = ast.Return(value=ast.Name(id=result_name, ctx=ast.Load()))
 
-    # Add a return statement returning the value of the last function call
-    last_func.body.append(ast.Return(value=last_call))
-
-    return ast.unparse(last_func)
+    return ast.unparse(ast.fix_missing_locations(last_func))
 
 
 def get_fn(fn_str, fn_name):
@@ -531,6 +538,9 @@ def inline_ast_functions(prog_str):
     fn = prog_ast.body[-1]
 
     for stmt in fn.body:
+        if isinstance(stmt, ast.For):
+            continue
+
         if isinstance(stmt.value, ast.Call):
             # Get the called function
             called_fn_name = stmt.value.func.id

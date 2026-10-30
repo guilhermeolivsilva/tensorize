@@ -37,6 +37,9 @@ std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 createFoldToTensorToMemrefPairPass();
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
+createIterArgsToMemrefPass();
+
+std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>
 createLoopDistributionPass();
 
 std::unique_ptr<mlir::OperationPass<mlir::ModuleOp>>

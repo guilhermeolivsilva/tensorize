@@ -8,6 +8,7 @@ add_mlir_library(transform
   CleanupPass.cc
   CopyModifiedMemrefsPass.cc
   FoldToTensorToMemrefPairPass.cc
+  IterArgsToMemrefPass.cc
   LoopDistributionPass.cc
   LoopSplitPass.cc
   LoopOutlinePass.cc

@@ -45,6 +45,16 @@ def FoldToTensorToMemrefPair: Pass<"fold-totensor-tomemref-pairs", "mlir::Module
   let constructor = "createFoldToTensorToMemrefPairPass()";
 }
 
+def IterArgsToMemref : Pass<"iter-args-to-memref", "mlir::ModuleOp"> {
+  let summary = "Convert affine loops with implicit carry-over to use explicit, memref.alloc accumulation variables.";
+  let description = [{}];
+  let constructor = "createIterArgsToMemrefPass()";
+  let dependentDialects = [
+    "mlir::AffineDialect",
+    "mlir::memref::MemRefDialect"
+  ];
+}
+
 def LoopDistribution: Pass<"distribute-loops", "mlir::ModuleOp"> {
   let summary = "Distributes loop";
   let description = [{

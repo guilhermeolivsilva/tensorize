@@ -29,8 +29,9 @@ pushd $BUILD_DIR
 FLAGS=".. \
   -GNinja \
   -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
-  -DMLIR_DIR=${PWD}/../deps/llvm-project/${BUILD_DIR}/lib/cmake/mlir \
-  -DMHLO_DIR=${PWD}/../deps/mlir-hlo/${BUILD_DIR}/cmake/modules/CMakeFiles \
+  -DMLIR_DIR=${PWD}/../deps/llvm-project/build/lib/cmake/mlir \
+  -DMHLO_DIR=${PWD}/../deps/mlir-hlo/build/cmake/modules/CMakeFiles \
+  -DLLVM_ENABLE_ASSERTIONS=ON \
   -DCMAKE_C_COMPILER=clang \
   -DCMAKE_CXX_COMPILER=clang++ \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "
